@@ -17,6 +17,8 @@ from sklearn.preprocessing import StandardScaler, MinMaxScaler
 from sklearn.cluster import KMeans, DBSCAN
 from sklearn.metrics import silhouette_score
 from sklearn.ensemble import IsolationForest
+from sklearn.neighbors import LocalOutlierFactor
+
 
 # Optimization libraries
 from scipy import stats
@@ -259,70 +261,180 @@ class TrainMlUnsupervised:
         else:
             print("DBSCAN model not fitted or PCA not performed.")
 
-    def evaluate_dbscan_clustering(self):
+    def evaluate_dbscan_clusters(self):
         """
-        Evaluate the clustering performance using silhouette score.
+        Evaluate DBSCAN clustering performance
         """
         if hasattr(self, 'dbscan_labels'):
-            if len(set(self.dbscan_labels)) > 1:
-                score = silhouette_score(self.X_train_pca, self.dbscan_labels)
-                print(f'Silhouette Score: {score:.4f}')
-            else:
-                print("Only one cluster found. Silhouette score cannot be computed.")
+            num_clusters = len(set(self.dbscan_labels)) - (1 if -1 in self.dbscan_labels else 0)
+            print(f'Number of clusters found: {num_clusters}')
+            print(f'Number of noise points: {list(self.dbscan_labels).count(-1)}')
         else:
-            print("DBSCAN model not fitted or labels not found.")
+            print("DBSCAN model not fitted.")
 
-    def tune_dbscan_parameters(self):
+    def kmeans_clustering(self, n_clusters=3):
         """
-        Tune DBSCAN parameters using Bayesian optimization.
+        Apply KMeans clustering algorithm
+
+        Inputs:
+            - n_clusters (int): The number of clusters to form
+
+        Assigns:
+            - self.kmeans_model (KMeans): Fitted KMeans model
+            - self.kmeans_labels (numpy array): Cluster labels for each data point
         """
-        def objective(params):
-            eps, min_samples = params
-            model = DBSCAN(eps=eps, min_samples=min_samples)
-            labels = model.fit_predict(self.X_train_pca)
-            if len(set(labels)) > 1:
-                score = silhouette_score(self.X_train_pca, labels)
-            else:
-                score = -1
-            return -score
+        kmeans = KMeans(n_clusters=n_clusters, random_state=42)
+        self.kmeans_labels = kmeans.fit_predict(self.X_train_pca)
+        self.kmeans_model = kmeans
 
-        search_space = [
-            Real(0.1, 1.0, name='eps'),
-            Integer(2, 50, name='min_samples')
-        ]
-
-        optimizer = skopt.Optimizer(search_space, n_initial_points=10, random_state=42)
-        result = optimizer.optimize(objective, n_iter=50)
-
-        best_params = result.x
-        print(f"Best parameters found: eps={best_params[0]}, min_samples={best_params[1]}")
-
-        self.dbscan_model = DBSCAN(eps=best_params[0], min_samples=int(best_params[1]))
-        self.dbscan_labels = self.dbscan_model.fit_predict(self.X_train_pca)
         LoadSave(self.ml_model_str,
                  self.is_feature_improved,
                  self.is_augmented,
                  self.is_tuned).load_or_dump_trained_object(
-                     trained_object=self.dbscan_model,
-                     output_indicator='dbscan_model_tuned',
+                     trained_object=self.kmeans_model,
+                     output_indicator='kmeans_model',
                      load_or_dump='dump')
 
-        print(f'Tuning Completed.')
+        print(f'KMeans Clustering Completed.')
 
-    def process(self):
+    def plot_kmeans_clusters(self):
         """
-        Complete processing pipeline
+        Plot the clusters formed by KMeans
         """
-        self.split_train_test()
-        if self.is_feature_improved == 'pca':
-            self.standardize_X_column_wise()
-            self.pca_transform()
+        if hasattr(self, 'X_train_pca') and hasattr(self, 'kmeans_labels'):
+            plt.figure(figsize=(10, 6))
+            plt.scatter(self.X_train_pca[:, 0], self.X_train_pca[:, 1], c=self.kmeans_labels, cmap='viridis')
+            plt.title('KMeans Clustering')
+            plt.xlabel('Principal Component 1')
+            plt.ylabel('Principal Component 2')
+            plt.colorbar(label='Cluster Label')
+            plt.show()
         else:
-            self.standardize_X_column_wise()
-        
-        self.dbscan_clustering()
-        self.plot_dbscan_clusters()
-        self.evaluate_dbscan_clustering()
-        if self.is_tuned == 'yes':
-            self.tune_dbscan_parameters()
+            print("KMeans model not fitted or PCA not performed.")
+
+    def evaluate_kmeans_clusters(self):
+        """
+        Evaluate KMeans clustering performance
+        """
+        if hasattr(self, 'kmeans_labels'):
+            silhouette_avg = silhouette_score(self.X_train_pca, self.kmeans_labels)
+            print(f'Silhouette Score for KMeans clustering: {silhouette_avg}')
+        else:
+            print("KMeans model not fitted.")
+
+    def fit_isolation_forest(self, contamination=0.1):
+        """
+        Fit Isolation Forest model for anomaly detection
+
+        Inputs:
+            - contamination (float): The proportion of outliers in the data set
+
+        Assigns:
+            - self.isolation_forest_model (IsolationForest): Fitted Isolation Forest model
+            - self.isolation_forest_scores (numpy array): Anomaly scores for each data point
+        """
+        isolation_forest = IsolationForest(contamination=contamination, random_state=42)
+        self.isolation_forest_scores = isolation_forest.fit_predict(self.X_train_standardized_column_wise)
+        self.isolation_forest_model = isolation_forest
+
+        LoadSave(self.ml_model_str,
+                 self.is_feature_improved,
+                 self.is_augmented,
+                 self.is_tuned).load_or_dump_trained_object(
+                     trained_object=self.isolation_forest_model,
+                     output_indicator='isolation_forest_model',
+                     load_or_dump='dump')
+
+        print(f'Isolation Forest Model Fitted.')
+
+    def plot_isolation_forest_scores(self):
+        """
+        Plot the anomaly scores given by Isolation Forest
+        """
+        if hasattr(self, 'isolation_forest_scores'):
+            plt.figure(figsize=(10, 6))
+            plt.hist(self.isolation_forest_scores, bins=50)
+            plt.title('Isolation Forest Anomaly Scores')
+            plt.xlabel('Anomaly Score')
+            plt.ylabel('Frequency')
+            plt.show()
+        else:
+            print("Isolation Forest model not fitted.")
+
+    def fit_local_outlier_factor(self, n_neighbors=20):
+        """
+        Fit Local Outlier Factor model for anomaly detection
+
+        Inputs:
+            - n_neighbors (int): Number of neighbors to use by default for Local Outlier Factor
+
+        Assigns:
+            - self.local_outlier_factor_model (LocalOutlierFactor): Fitted Local Outlier Factor model
+            - self.local_outlier_factor_scores (numpy array): Anomaly scores for each data point
+        """
+        local_outlier_factor = LocalOutlierFactor(n_neighbors=n_neighbors)
+        self.local_outlier_factor_scores = local_outlier_factor.fit_predict(self.X_train_standardized_column_wise)
+        self.local_outlier_factor_model = local_outlier_factor
+
+        LoadSave(self.ml_model_str,
+                 self.is_feature_improved,
+                 self.is_augmented,
+                 self.is_tuned).load_or_dump_trained_object(
+                     trained_object=self.local_outlier_factor_model,
+                     output_indicator='local_outlier_factor_model',
+                     load_or_dump='dump')
+
+        print(f'Local Outlier Factor Model Fitted.')
+
+    def plot_local_outlier_factor_scores(self):
+        """
+        Plot the anomaly scores given by Local Outlier Factor
+        """
+        if hasattr(self, 'local_outlier_factor_scores'):
+            plt.figure(figsize=(10, 6))
+            plt.hist(self.local_outlier_factor_scores, bins=50)
+            plt.title('Local Outlier Factor Anomaly Scores')
+            plt.xlabel('Anomaly Score')
+            plt.ylabel('Frequency')
+            plt.show()
+        else:
+            print("Local Outlier Factor model not fitted.")
+
+    def tune_hyperparameters(self, search_space, n_iter=50):
+        """
+        Tune hyperparameters using Bayesian optimization
+
+        Inputs:
+            - search_space (dict): Dictionary defining the hyperparameter search space
+            - n_iter (int): Number of iterations for optimization
+
+        Assigns:
+            - self.best_model (object): Best model with optimized hyperparameters
+        """
+        search = BayesSearchCV(self.ml_model, search_space, n_iter=n_iter, n_jobs=self.n_jobs, cv=self.cv)
+        search.fit(self.X_train_standardized_column_wise)
+        self.best_model = search.best_estimator_
+
+        LoadSave(self.ml_model_str,
+                 self.is_feature_improved,
+                 self.is_augmented,
+                 self.is_tuned).load_or_dump_trained_object(
+                     trained_object=self.best_model,
+                     output_indicator='best_model',
+                     load_or_dump='dump')
+
+        print(f'Hyperparameters Tuned.')
+
+    def plot_optimization_results(self, search_result):
+        """
+        Plot the results of the optimization process
+
+        Inputs:
+            - search_result (BayesSearchCV): The search result from Bayesian optimization
+        """
+        plot_evaluations(search_result)
+        plt.show()
+
+        plot_objective(search_result)
+        plt.show()
 
